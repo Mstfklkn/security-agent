@@ -22,10 +22,7 @@ LANGUAGES: tuple[str, ...] = (
     "python", "java", "kotlin", "cpp", "csharp", "typescript", "javascript",
     "go", "rust", "php", "ruby", "swift", "docker", "terraform", "kubernetes",
 )
-Language = Literal[
-    "python", "java", "kotlin", "cpp", "csharp", "typescript", "javascript",
-    "go", "rust", "php", "ruby", "swift", "docker", "terraform", "kubernetes",
-]
+Language = Literal[LANGUAGES]  # type: ignore[valid-type]  # tek kaynak: LANGUAGES
 
 # Eğitim hedefinden çıkarılan, çıkarım sonrası deterministik eklenen alanlar.
 _TRAIN_EXCLUDE = {"output": {"findings": {"__all__": {"cvss", "references"}}}}
@@ -118,12 +115,16 @@ def iter_valid(path: str | Path) -> Iterator[Example]:
                 yield Example.model_validate_json(line)
 
 
-if __name__ == "__main__":
+def main() -> int:
     import sys
 
     if len(sys.argv) != 2:
-        print("Kullanım: python schema.py <örnekler.jsonl>")
-        raise SystemExit(2)
+        print("Kullanım: secagent-validate <örnekler.jsonl>")
+        return 2
     good, broken = validate_file(sys.argv[1])
     print(f"Geçerli: {good}  Hatalı: {broken}")
-    raise SystemExit(1 if broken else 0)
+    return 1 if broken else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

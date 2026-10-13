@@ -1,7 +1,7 @@
 import json
 
-import run_scanners as rs
-from schema import LANGUAGES
+from secagent.scanners import runners as rs
+from secagent.schema import LANGUAGES
 
 
 def test_every_language_has_scanners_and_matches_schema():
@@ -31,9 +31,12 @@ def _fake(monkeypatch, output):
 
 
 def test_cppcheck_parses_merged_stderr(monkeypatch):
-    _fake(monkeypatch, "a.cpp:7:nullPointer:error:Null pointer dereference\nnoise\n")
+    _fake(monkeypatch, "a.cpp:7:nullPointer:error:476:Null pointer: a:b\nnoise\n"
+                       "a.cpp:9:foo:warning:0:no cwe\n")
     f = rs.run_cppcheck(".")
-    assert [(x.line, x.rule_id, x.severity) for x in f] == [(7, "nullPointer", "error")]
+    assert [(x.line, x.rule_id, x.severity, x.cwe) for x in f] == [
+        (7, "nullPointer", "error", "CWE-476"), (9, "foo", "warning", None)]
+    assert f[0].message == "Null pointer: a:b"
 
 
 def test_gosec_cwe_and_line_range(monkeypatch):

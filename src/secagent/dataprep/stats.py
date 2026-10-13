@@ -1,6 +1,6 @@
 """JSONL için dil / CWE / örnek türü dağılımı raporu.
 
-Kullanım: python stats.py out/train.jsonl
+Kullanım: secagent-stats data/out/train.jsonl
 """
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from schema import LANGUAGES, iter_valid  # noqa: E402
+from ..schema import LANGUAGES, iter_valid
 
 
 def compute(path: str | Path) -> dict:
@@ -28,11 +27,16 @@ def compute(path: str | Path) -> dict:
             "missing_languages": [l for l in LANGUAGES if langs[l] == 0]}
 
 
-if __name__ == "__main__":
+def main() -> int:
     if len(sys.argv) != 2:
-        raise SystemExit("Kullanım: python stats.py <jsonl>")
+        raise SystemExit("Kullanım: secagent-stats <jsonl>")
     r = compute(sys.argv[1])
     print("Dil:", dict(r["languages"].most_common()))
     print("Tür:", dict(r["kinds"]))
     print("En sık CWE:", r["cwes"].most_common(10))
     print("Verisi olmayan diller:", r["missing_languages"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

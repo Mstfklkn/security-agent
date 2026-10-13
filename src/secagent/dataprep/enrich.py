@@ -19,14 +19,14 @@ Projeye özgü araçlar (osv, gosec, govulncheck, brakeman) tek dosyalık
 from __future__ import annotations
 
 import re
-import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Iterable
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scanners"))
-import run_scanners as rs  # noqa: E402
+from .. import mappings
+from ..scanners import runners as rs
+from ..scanners.rules import fill_cwe
 
 ScanFn = Callable[[str, str], list[dict]]
 
@@ -55,8 +55,8 @@ def snippet_scan(path: str, language: str) -> list[dict]:
     """Yalnızca tek dosyada anlamlı tarayıcıları çalıştırır."""
     from dataclasses import asdict
     runners = rs._BY_LANG.get(rs.normalize_language(language), [])
-    return [asdict(f) for r in runners if r.__name__ not in _PROJECT_LEVEL
-            for f in r(path)]
+    return fill_cwe([asdict(f) for r in runners if r.__name__ not in _PROJECT_LEVEL
+                     for f in r(path)])
 
 
 def _record_index(file: str) -> int | None:
@@ -96,7 +96,8 @@ def _fp_finding(alarm: dict, code: str) -> dict | None:
 def label_record(rec: dict, alarms: list[dict], ambiguous: str = "skip") -> dict | None:
     """Tek kaydı etiketler. None: kayıt atlanmalı."""
     gold = rec["findings"][0]["cwe"] if rec.get("findings") else rec.get("pair_cwe")
-    clear = [a for a in alarms if a.get("cwe") == gold and isinstance(a.get("line"), int)]
+    clear = [a for a in alarms
+             if mappings.cwe_related(a.get("cwe"), gold) and isinstance(a.get("line"), int)]
     unclear = [a for a in alarms if a not in clear]
     if unclear and ambiguous == "skip":
         return None
@@ -120,6 +121,16 @@ def label_record(rec: dict, alarms: list[dict], ambiguous: str = "skip") -> dict
             "findings": fps, "summary": summary}
 
 
+def localize(rec: dict, alarms: list[dict]) -> list[dict]:
+    """Fonksiyon düzeyi kayıtta: yalnızca fonksiyon aralığındaki alarmları tutar ve
+    satırları fonksiyona göre yeniden numaralar. Dosya düzeyinde değişmez."""
+    if "scan_start" not in rec:
+        return alarms
+    start, end = rec["scan_start"], rec["scan_end"]
+    return [{**a, "line": a["line"] - start + 1} for a in alarms
+            if isinstance(a.get("line"), int) and start <= a["line"] <= end]
+
+
 def _scan_batch(batch: list[tuple[int, dict]], language: str, scan_fn: ScanFn
                 ) -> dict[int, list[dict]]:
     with tempfile.TemporaryDirectory() as tmp:
@@ -127,7 +138,7 @@ def _scan_batch(batch: list[tuple[int, dict]], language: str, scan_fn: ScanFn
         for idx, rec in batch:
             d = root / f"rec_{idx}"
             d.mkdir()
-            (d / _safe_name(rec)).write_text(rec["code"], encoding="utf-8")
+            (d / _safe_name(rec)).write_text(rec.get("scan_code", rec["code"]), encoding="utf-8")
         found: dict[int, list[dict]] = defaultdict(list)
         for a in scan_fn(str(root), language):
             idx = _record_index(a.get("file", ""))
@@ -153,7 +164,7 @@ def enrich(records: Iterable[dict], batch_size: int = 200, ambiguous: str = "ski
             batch = items[s:s + batch_size]
             alarms = _scan_batch(batch, lang, scan_fn)
             for idx, rec in batch:
-                labeled = label_record(rec, alarms.get(idx, []), ambiguous)
+                labeled = label_record(rec, localize(rec, alarms.get(idx, [])), ambiguous)
                 if labeled is None:
                     out[idx] = None
                     stats["skipped_ambiguous"] += 1

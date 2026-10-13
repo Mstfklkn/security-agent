@@ -9,8 +9,7 @@ deterministik olarak üretilir. CVE linki yalnızca somut kaynağı olan
 
 CVSS: Her CWE için TİPİK bir vektör/skor veriyoruz. Bu yalnızca kaynak
 veri setinde CVSS bulunmadığında, makul bir varsayılan olarak kullanılır
-ve örnekte "cvss_source": "default" olarak işaretlenir (make_examples.py).
-Gerçek CVSS varsa o kullanılır.
+(dataprep/build.py). Gerçek CVSS (CVEfixes/NVD) varsa her zaman o kullanılır.
 """
 from __future__ import annotations
 
@@ -114,3 +113,34 @@ CWE_NAMES: dict[str, str] = {
 
 def title_for(cwe: str) -> str:
     return CWE_NAMES.get(cwe, f"{cwe} zafiyeti")
+
+
+# --- İlgili CWE aileleri -------------------------------------------------
+# Tarayıcılar çoğu zaman yamanın CWE'sine yakın ama farklı bir CWE bildirir
+# (ör. CWE-119 yerine CWE-120). Aynı ailedeki CWE'ler "eşleşen" sayılır.
+_FAMILIES: tuple[frozenset[str], ...] = tuple(frozenset(f"CWE-{n}" for n in g) for g in (
+    (119, 120, 121, 122, 125, 126, 127, 787, 788, 805, 823),   # bellek sınırları
+    (89, 564, 943),                                            # SQL/sorgu enjeksiyonu
+    (77, 78, 88, 94, 95, 917),                                 # komut/kod enjeksiyonu
+    (22, 23, 36, 73),                                          # yol gezinmesi
+    (79, 80, 83, 87),                                          # XSS
+    (250, 266, 268, 269, 272, 273, 284, 732),                  # ayrıcalık/erişim
+    (287, 288, 290, 306, 862, 863, 639, 285),                  # kimlik/yetki
+    (327, 328, 326, 916, 759, 760),                            # zayıf kripto/hash
+    (798, 259, 321, 547, 256, 312, 522),                       # gömülü sır/kimlik bilgisi
+    (295, 297, 299),                                           # sertifika doğrulama
+    (416, 415, 476, 401, 772),                                 # bellek yaşam döngüsü
+    (190, 191, 681, 369),                                      # sayısal hatalar
+    (502, 915),                                                # deserialization
+    (200, 209, 532, 497),                                      # bilgi ifşası
+    (311, 312, 313, 315, 316, 319),                            # şifrelemesiz saklama/iletim
+    (668, 406, 200),                                           # kaynağın yanlış kapsamda ifşası
+    (250, 668),                                                # konteynerden ana makineye kaçış yüzeyi
+))
+
+
+def cwe_related(a: str | None, b: str | None) -> bool:
+    """Aynı CWE veya aynı aile."""
+    if not a or not b:
+        return False
+    return a == b or any(a in fam and b in fam for fam in _FAMILIES)

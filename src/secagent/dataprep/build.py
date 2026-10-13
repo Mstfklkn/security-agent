@@ -3,7 +3,7 @@ Eğitim örnekleri üreticisi.
 
 İki kaynaktan JSONL eğitim örnekleri üretir:
 
-  1) Zafiyet veri setleri (datasets/raw/*): zafiyetli kod + düzeltme commit'i.
+  1) Zafiyet veri setleri (data/raw/*): zafiyetli kod + düzeltme commit'i.
      Her kayıttan "kod + tarayıcı çıktısı -> doğrulanmış rapor" örneği çıkar.
 
   2) Yerel örnek kod (samples/): kendi eklediğin, bilerek zafiyetli küçük
@@ -14,7 +14,7 @@ Referans ve CVSS, mappings.py üzerinden deterministik eklenir — model
 URL/CVE uydurmasın diye.
 
 Kullanım:
-    python make_examples.py --out ../out/train.jsonl
+    secagent-build --cvefixes --out-dir
 """
 from __future__ import annotations
 
@@ -23,16 +23,12 @@ import json
 import sys
 from pathlib import Path
 
-# schema ve mappings aynı pakette
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from schema import (CVSS, Example, ExampleInput, ExampleOutput,  # noqa: E402
-                    Finding)
-import mappings  # noqa: E402
-from splits import SPLITS, code_hash, split_for  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from readers import cvefixes  # noqa: E402
-import enrich_scanners  # noqa: E402
+from .. import mappings
+from ..paths import CVEFIXES_DB, OUT, SAMPLES
+from ..schema import CVSS, Example, ExampleInput, ExampleOutput, Finding
+from . import enrich as enrich_scanners
+from .sources import cvefixes, synthetic
+from .splits import SPLITS, code_hash, split_for
 
 
 def make_finding(
@@ -45,10 +41,12 @@ def make_finding(
     cve_id: str | None = None,
     real_cvss: tuple[float, str] | None = None,
     false_positive: bool = False,
+    severity_override: str | None = None,
 ) -> Finding:
     """Bir bulguyu şema nesnesine çevirir; referans ve CVSS'i merkezi
     eşlemelerden deterministik ekler."""
     severity, dscore, dvector = mappings.defaults_for(cwe)
+    severity = severity_override or severity
 
     cvss = None
     if real_cvss is not None:                 # kaynak veride gerçek CVSS varsa
@@ -91,6 +89,7 @@ def example_from_record(rec: dict) -> Example | None:
                 cve_id=f.get("cve_id"),
                 real_cvss=tuple(f["cvss"]) if f.get("cvss") else None,
                 false_positive=f.get("false_positive", False),
+                severity_override=f.get("severity"),
             )
             for f in rec.get("findings", [])
         ]
@@ -148,10 +147,18 @@ def write_split(records: list[dict], out_dir: Path, training: bool) -> dict[str,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="tek dosya çıktı (bölmesiz)")
-    ap.add_argument("--out-dir", help="train/val/test.jsonl yazılacak klasör")
-    ap.add_argument("--samples", default=str(Path(__file__).parent.parent / "samples"))
-    ap.add_argument("--cvefixes", help="CVEfixes.db (SQLite) yolu")
-    ap.add_argument("--limit", type=int, help="CVEfixes'tan en çok N (CVE, dosya) çifti")
+    ap.add_argument("--out-dir", nargs="?", const=str(OUT),
+                    help=f"train/val/test.jsonl klasörü (değer verilmezse {OUT})")
+    ap.add_argument("--samples", default=str(SAMPLES))
+    ap.add_argument("--cvefixes", nargs="?", const=str(CVEFIXES_DB),
+                    help=f"CVEfixes.db yolu (değer verilmezse {CVEFIXES_DB})")
+    ap.add_argument("--limit", type=int, help="CVEfixes'tan toplam en çok N (CVE, dosya) çifti")
+    ap.add_argument("--granularity", choices=["file", "function", "both"], default="function",
+                    help="CVEfixes örnek düzeyi (varsayılan: değişen fonksiyon)")
+    ap.add_argument("--per-language", type=int,
+                    help="CVEfixes'tan her dilden en çok N çift (dengeli örnekleme)")
+    ap.add_argument("--synthetic", type=int, default=0, metavar="N",
+                    help="her sentetik şablondan N varyant (kotlin/swift/docker/terraform/k8s)")
     ap.add_argument("--enrich", action="store_true",
                     help="gerçek tarayıcıları çalıştır, scanner_output ve yanlış alarmları ekle")
     ap.add_argument("--ambiguous", choices=["skip", "drop"], default="skip",
@@ -165,11 +172,18 @@ def main() -> int:
 
     records: list[dict] = list(load_samples(Path(args.samples)))
     if args.cvefixes:
-        records += list(cvefixes.read(args.cvefixes, limit=args.limit))
+        records += list(cvefixes.read(args.cvefixes, limit=args.limit,
+                                         per_language=args.per_language,
+                                         granularity=args.granularity))
 
+    if args.synthetic:
+        records += list(synthetic.generate(args.synthetic))
     if args.enrich:
         records, st = enrich_scanners.enrich(records, ambiguous=args.ambiguous)
         print(f"Zenginleştirme: {st}")
+    records, dropped = synthetic.keep_validated_false_positives(records)
+    if dropped:
+        print(f"Sentetik yanlış alarm: tarayıcı işaretlemediği için elenen: {dropped}")
 
     training = args.strip
     if args.out_dir:

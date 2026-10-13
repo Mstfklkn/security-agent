@@ -3,7 +3,7 @@ Tarayıcı katmanı — ajanın "gözü".
 
 Bir kod yolu alır, dile göre doğru statik analiz araçlarını çalıştırır ve
 hepsinin çıktısını tek bir ortak JSON formatına toplar. Bu format hem
-eğitim verisi üretmekte (make_examples.py) hem de çalışma anında ajanın
+eğitim verisi üretmekte (dataprep/build.py) hem de çalışma anında ajanın
 girdisi olarak kullanılır.
 
 Bu modül yalnızca TESPİT aracı çalıştırır (SAST / bağımlılık / sır / yapılandırma
@@ -30,6 +30,8 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from .rules import fill_cwe
 
 
 @dataclass
@@ -214,17 +216,21 @@ def run_trivy(path: str) -> list[RawFinding]:
 def run_cppcheck(path: str) -> list[RawFinding]:
     if not _have("cppcheck"):
         return []
-    # cppcheck bulguları stderr'e yazar -> merge_stderr
-    out = _run(["cppcheck", "--enable=warning,style",
-                "--template={file}:{line}:{id}:{severity}:{message}",
+    # Bulgular stderr'e yazılır -> merge_stderr. {cwe} alanı alınır; include
+    # bulunamadı gibi bilgi uyarıları (missingInclude*) gürültüdür, bastırılır.
+    out = _run(["cppcheck", "--enable=warning",
+                "--suppress=missingInclude", "--suppress=missingIncludeSystem",
+                "--template={file}:{line}:{id}:{severity}:{cwe}:{message}",
                 "--quiet", path], merge_stderr=True)
     res = []
     for ln in out.splitlines():
-        parts = ln.split(":", 4)
-        if len(parts) == 5 and parts[1].isdigit():
-            f, line, rid, sev, msg = parts
-            res.append(RawFinding(tool="cppcheck", file=f, line=int(line),
-                                  rule_id=rid, message=msg, severity=sev.lower()))
+        parts = ln.split(":", 5)
+        if len(parts) == 6 and parts[1].isdigit():
+            f, line, rid, sev, cwe, msg = parts
+            res.append(RawFinding(
+                tool="cppcheck", file=f, line=int(line), rule_id=rid,
+                message=msg, severity=sev.lower(),
+                cwe=_cwe(cwe) if cwe not in ("", "0") else None))
     return res
 
 
@@ -366,7 +372,7 @@ def scan(path: str, language: str) -> list[dict]:
     if runners is None:
         print(f"[uyarı] bilinmeyen dil: {language}", file=sys.stderr)
         return []
-    return [asdict(f) for runner in runners for f in runner(path)]
+    return fill_cwe([asdict(f) for runner in runners for f in runner(path)])
 
 
 def scan_all(path: str) -> list[dict]:
@@ -386,10 +392,10 @@ def scan_all(path: str) -> list[dict]:
             if key not in seen:
                 seen.add(key)
                 out.append(d)
-    return out
+    return fill_cwe(out)
 
 
-if __name__ == "__main__":
+def main() -> int:
     import argparse
 
     ap = argparse.ArgumentParser(description="Savunma amaçlı statik tarama")
@@ -401,3 +407,8 @@ if __name__ == "__main__":
     results = scan(args.path, args.lang) if args.lang else scan_all(args.path)
     print(json.dumps(results, indent=2, ensure_ascii=False))
     print(f"\n{len(results)} ham bulgu.", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

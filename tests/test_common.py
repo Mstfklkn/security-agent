@@ -1,4 +1,4 @@
-from readers.common import (enclosing_function, first_changed_line,
+from secagent.dataprep.sources.common import (enclosing_function, first_changed_line,
                             removed_lines, template_fix)
 
 DIFF = """@@ -3,4 +3,4 @@ def f():

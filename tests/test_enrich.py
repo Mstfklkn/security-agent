@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import enrich_scanners as en
+from secagent.dataprep import enrich as en
 
 CODE = "import os\nq = 'SELECT ' + x\nos.system(y)\n"
 
@@ -96,10 +96,33 @@ def test_enrich_skips_hand_written_and_counts_ambiguous():
 def test_real_bandit_end_to_end():
     code = "import subprocess\n\ndef run(c):\n    return subprocess.call(c, shell=True)\n"
     from dataclasses import asdict
-    import run_scanners as rs
+    from secagent.scanners import runners as rs
     bandit_only = lambda path, lang: [asdict(f) for f in rs.run_bandit(path)]
     out, st = en.enrich([rec(pair="CWE-78", code=code)], scan_fn=bandit_only)
     assert st["enriched"] + st["skipped_ambiguous"] == 1
     if out:
         assert out[0]["findings"][0]["cwe"] == "CWE-78"
         assert "bandit" in out[0]["scanner_output"]
+
+
+def test_localize_filters_to_function_range_and_rebases():
+    r = {**rec(), "scan_start": 10, "scan_end": 20}
+    al = [alarm(line=9), alarm(line=10), alarm(line=15), alarm(line=21), {**alarm(), "line": None}]
+    out = en.localize(r, al)
+    assert [a["line"] for a in out] == [1, 6]
+    assert en.localize(rec(), al) == al                    # dosya düzeyi: değişmez
+
+
+def test_function_level_scans_whole_file_but_labels_function():
+    r = {**rec(code="f body\nline2\n"), "scan_code": "x\n" * 9 + "f body\nline2\n",
+         "scan_start": 10, "scan_end": 11}
+    seen = {}
+
+    def fake(path, lang):
+        f = next(Path(path).glob("rec_*/*"))
+        seen["text"] = f.read_text()
+        return [{**alarm(file=str(f)), "line": 11, "cwe": "CWE-89"}]
+
+    out, st = en.enrich([r], scan_fn=fake)
+    assert seen["text"].startswith("x\n")                  # tarayıcı DOSYAYI gördü
+    assert out[0]["findings"][0]["line"] == 2 and out[0]["findings"][0]["false_positive"]
