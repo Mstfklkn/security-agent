@@ -1,0 +1,31 @@
+# OS / editör
+.DS_Store
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.venv/
+
+# Büyük/üretilmiş veri — depoya girmez
+data/data/
+data/out/
+data/datasets/raw/
+*.zip
+*.db
+*.sql
+*.sql.gz
+*.aria2
+
+# Model / eğitim çıktıları
+*.safetensors
+*.gguf
+*.bin
+checkpoints/
+adapters/
+
+# Sırlar
+.env
+*.pem

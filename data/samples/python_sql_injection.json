@@ -1,0 +1,18 @@
+{
+  "file": "app/db.py",
+  "language": "python",
+  "code": "import sqlite3\n\ndef get_user_by_id(conn, user_id):\n    cur = conn.cursor()\n    query = \"SELECT * FROM users WHERE id = '%s'\" % user_id\n    cur.execute(query)\n    return cur.fetchone()\n",
+  "scanner_output": "bandit: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction. (app/db.py:5, severity: medium)",
+  "findings": [
+    {
+      "cwe": "CWE-89",
+      "function": "get_user_by_id",
+      "line": 5,
+      "title": "SQL injection via string formatting in query construction",
+      "evidence": "query = \"SELECT * FROM users WHERE id = '%s'\" % user_id",
+      "fix": "Parametreli sorgu kullan: cur.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,)). Kullanıcı girdisini asla sorgu dizgisine birleştirme.",
+      "false_positive": false
+    }
+  ],
+  "summary": "get_user_by_id fonksiyonu user_id'yi doğrudan SQL dizgisine birleştiriyor; parametreli sorguyla düzeltilmeli."
+}

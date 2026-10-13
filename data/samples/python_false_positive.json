@@ -1,0 +1,18 @@
+{
+  "file": "app/report.py",
+  "language": "python",
+  "code": "import subprocess\n\nALLOWED = {\"ls\", \"df\", \"uptime\"}\n\ndef run_metric(name):\n    if name not in ALLOWED:\n        raise ValueError(\"izin verilmeyen komut\")\n    return subprocess.run([name], capture_output=True, text=True).stdout\n",
+  "scanner_output": "bandit: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input. (app/report.py:8, severity: low)",
+  "findings": [
+    {
+      "cwe": "CWE-78",
+      "function": "run_metric",
+      "line": 8,
+      "title": "subprocess çağrısı — tarayıcı uyarısı ancak girdi beyaz listede",
+      "evidence": "return subprocess.run([name], capture_output=True, text=True).stdout",
+      "fix": "Düzeltme gerekmiyor: 'name' sabit ALLOWED kümesine karşı doğrulanıyor, shell=True yok ve argümanlar liste olarak geçiliyor. Tarayıcı uyarısı yanlış alarm.",
+      "false_positive": true
+    }
+  ],
+  "summary": "Bandit subprocess kullanımını işaretledi, ancak girdi beyaz listeyle doğrulandığı ve shell kullanılmadığı için bu gerçek bir zafiyet değil."
+}
