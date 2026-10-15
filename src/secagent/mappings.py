@@ -144,3 +144,29 @@ def cwe_related(a: str | None, b: str | None) -> bool:
     if not a or not b:
         return False
     return a == b or any(a in fam and b in fam for fam in _FAMILIES)
+
+
+# --- Mantık/yetkilendirme hataları ---------------------------------------
+# Projenin başlık becerisi: tarayıcıların çoğunlukla KAÇIRDIĞI sınıf.
+LOGIC_CWES: frozenset[str] = frozenset({
+    "CWE-639", "CWE-862", "CWE-863", "CWE-284", "CWE-285",   # IDOR / yetkilendirme
+    "CWE-287", "CWE-306",                                    # kimlik doğrulama
+    "CWE-502", "CWE-915",                                    # deserialization / toplu atama
+    "CWE-352",                                               # CSRF
+})
+
+
+def is_logic(cwe: str | None) -> bool:
+    return cwe in LOGIC_CWES
+
+
+# --- Otomatik "yanlış alarm" etiketinin YASAK olduğu aileler --------------
+# "Yamadan sonra aynı CWE'de alarm kalıyor" kuralı zayıf denetimlidir. Enjeksiyon, kod
+# çalıştırma, deserialization ve gömülü sır gibi sınıflarda modele "bu alarmı yoksay"
+# öğretmek en pahalı hatadır (kritik açığı kaçırmak); bu yüzden orada otomatik FP etiketi
+# üretilmez. Elle seçilmiş (sentetik) istisnalar bu kuralın dışındadır.
+_RISKY_DISMISSAL_CORE = ("CWE-78", "CWE-89", "CWE-94", "CWE-502", "CWE-798")
+
+
+def is_risky_dismissal(cwe: str | None) -> bool:
+    return any(cwe_related(cwe, core) for core in _RISKY_DISMISSAL_CORE)

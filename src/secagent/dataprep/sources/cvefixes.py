@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ... import mappings
 from ...schema import LANGUAGES
-from .common import (enclosing_function, first_changed_line, line_text,
+from .common import (enclosing_function, first_changed_line, group_key, line_text,
                      removed_lines, template_fix)
 
 LANG_MAP = {
@@ -42,7 +42,7 @@ FROM fixes fx
 JOIN file_change fc ON fc.hash = fx.hash
 WHERE fc.code_before IS NOT NULL AND fc.code_after IS NOT NULL
   AND fc.code_before != 'None' AND fc.code_after != 'None'
-  AND fx.cve_id IN (SELECT cve_id FROM cwe_classification)
+  AND fx.cve_id IN (SELECT cve_id FROM cwe_classification{cwe_clause})
   AND lower(fc.programming_language) IN ({marks})
 ORDER BY (fc.rowid * 2654435761) % 1000003
 """
@@ -87,25 +87,46 @@ def _cvss(conn: sqlite3.Connection, cve_id: str) -> tuple[float, str] | None:
     return score, vector
 
 
-def _context(conn: sqlite3.Connection, row: tuple) -> tuple[str, str] | None:
+def _context(conn: sqlite3.Connection, row: tuple,
+             cwes: frozenset[str] | None = None) -> tuple[str, str] | None:
     """(normalize dil, CWE) — dil desteklenmiyorsa, geçerli CWE yoksa veya dosya
     çok büyükse None. _pair ve _function_pairs ortak girişi."""
     cve_id, _repo, _fc_id, _filename, _diff, before, after, lang = row
     language = LANG_MAP.get((lang or "").strip().lower())
     if language is None or language not in LANGUAGES:
         return None
-    cwes = [c for (c,) in conn.execute(
+    found = [c for (c,) in conn.execute(
         "SELECT cwe_id FROM cwe_classification WHERE cve_id = ?", (cve_id,))]
-    cwe = next((c for c in cwes if _CWE.match(c or "")), None)
+    cwe = next((c for c in found if _CWE.match(c or "") and (cwes is None or c in cwes)), None)
     if cwe is None or max(len(before), len(after)) > MAX_CODE_CHARS:
         return None
     return language, cwe
 
 
-def _pair(conn: sqlite3.Connection, row: tuple) -> tuple[dict, dict] | None:
+def cvss_map(db_path: str | Path) -> dict[str, tuple[float, str]]:
+    """Tüm CVE'ler için gerçek (NVD) CVSS v3: {cve_id: (skor, vektör)}. Başka kaynaklar
+    (PrimeVul) CVE kimliğiyle bu tablodan gerçek CVSS alır."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        out = {}
+        for cve_id, score, vector in conn.execute(
+                "SELECT cve_id, cvss3_base_score, cvss3_vector_string FROM cve"):
+            try:
+                s, v = float(score), str(vector)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= s <= 10.0 and v.startswith("CVSS:3"):
+                out[cve_id] = (s, v)
+        return out
+    finally:
+        conn.close()
+
+
+def _pair(conn: sqlite3.Connection, row: tuple,
+          cwes: frozenset[str] | None = None) -> tuple[dict, dict] | None:
     """Bir satırı (zafiyetli, temiz) kayıt çiftine çevirir; uygun değilse None."""
     cve_id, repo, fc_id, filename, diff, before, after, lang = row
-    context = _context(conn, row)
+    context = _context(conn, row, cwes)
     if context is None:
         return None
     language, cwe = context
@@ -114,12 +135,12 @@ def _pair(conn: sqlite3.Connection, row: tuple) -> tuple[dict, dict] | None:
         return None
 
     title = mappings.title_for(cwe)
-    group = repo or cve_id
+    group = group_key(repo or cve_id)
     real_cvss = _cvss(conn, cve_id)
     finding = {
         "cwe": cwe, "line": line,
         "function": enclosing_function(iter(_methods(conn, fc_id, True)), line),
-        "title": f"{title} ({cve_id})"[:160],
+        "title": title[:160],
         "evidence": line_text(before, line),
         "fix": template_fix(title, diff or ""),
         "cve_id": cve_id,
@@ -129,7 +150,7 @@ def _pair(conn: sqlite3.Connection, row: tuple) -> tuple[dict, dict] | None:
         "file": filename, "language": language, "code": before,
         "scanner_output": "", "group": group, "pair_cwe": cwe,
         "findings": [finding],
-        "summary": f"{filename} dosyasında {title} bulgusu ({cve_id} ile ilişkili yama).",
+        "summary": f"{filename} dosyasında {title} bulgusu (upstream düzeltmesinden).",
     }
     clean = {
         "file": filename, "language": language, "code": after,
@@ -145,13 +166,14 @@ def _slice_matches(full: str, start: int, end: int, code: str) -> bool:
     return bool(code.strip()) and seg.strip() == code.strip()
 
 
-def _function_pairs(conn: sqlite3.Connection, row: tuple) -> list[tuple[dict, dict]]:
+def _function_pairs(conn: sqlite3.Connection, row: tuple,
+                    cwes: frozenset[str] | None = None) -> list[tuple[dict, dict]]:
     """Değişen her fonksiyon için (zafiyetli, temiz) kayıt çifti.
 
     Tarayıcı DOSYA üzerinde çalışır (scan_code); model yalnızca fonksiyonu ve
     fonksiyon içine düşen alarmları görür (çalışma anındaki parçalamayla aynı)."""
     cve_id, repo, fc_id, filename, diff, before, after, lang = row
-    context = _context(conn, row)
+    context = _context(conn, row, cwes)
     if context is None:
         return []
     language, cwe = context
@@ -167,7 +189,7 @@ def _function_pairs(conn: sqlite3.Connection, row: tuple) -> list[tuple[dict, di
 
     title = mappings.title_for(cwe)
     real_cvss = _cvss(conn, cve_id)
-    group = repo or cve_id
+    group = group_key(repo or cve_id)
     pairs: list[tuple[dict, dict]] = []
     for name, s, e, code in sorted(old, key=lambda m: m[2] - m[1]):
         lines = code.splitlines()
@@ -184,7 +206,7 @@ def _function_pairs(conn: sqlite3.Connection, row: tuple) -> list[tuple[dict, di
         rel = min(hits) - s + 1
         finding = {
             "cwe": cwe, "line": rel, "function": name,
-            "title": f"{title} ({cve_id})"[:160],
+            "title": title[:160],
             "evidence": line_text(code, rel),
             "fix": template_fix(title, diff or ""),
             "cve_id": cve_id,
@@ -195,7 +217,7 @@ def _function_pairs(conn: sqlite3.Connection, row: tuple) -> list[tuple[dict, di
             "scan_code": before, "scan_start": s, "scan_end": e,
             "scanner_output": "", "group": group, "pair_cwe": cwe,
             "findings": [finding],
-            "summary": f"{name} fonksiyonunda {title} bulgusu ({cve_id} ile ilişkili yama).",
+            "summary": f"{name} fonksiyonunda {title} bulgusu (upstream düzeltmesinden).",
         }, {
             "file": filename, "language": language, "code": ncode,
             "scan_code": after, "scan_start": ns, "scan_end": ne,
@@ -208,22 +230,28 @@ def _function_pairs(conn: sqlite3.Connection, row: tuple) -> list[tuple[dict, di
 
 
 def _pairs_for_language(conn: sqlite3.Connection, language: str,
-                        granularity: str = "file") -> Iterator[tuple[dict, dict]]:
+                        granularity: str = "file",
+                        cwes: frozenset[str] | None = None) -> Iterator[tuple[dict, dict]]:
     raws = [raw for raw, norm in LANG_MAP.items() if norm == language]
-    query = _QUERY.format(marks=",".join("?" * len(raws)))
-    for row in conn.execute(query, raws):
+    clause = f" WHERE cwe_id IN ({','.join('?' * len(cwes))})" if cwes else ""
+    query = _QUERY.format(marks=",".join("?" * len(raws)), cwe_clause=clause)
+    params = [*(sorted(cwes) if cwes else []), *raws]
+    for row in conn.execute(query, params):
         if granularity in ("file", "both"):
-            pair = _pair(conn, row)
+            pair = _pair(conn, row, cwes)
             if pair is not None:
                 yield pair
         if granularity in ("function", "both"):
-            yield from _function_pairs(conn, row)
+            yield from _function_pairs(conn, row, cwes)
 
 
 def read(db_path: str | Path, limit: int | None = None,
-         per_language: int | None = None, granularity: str = "file") -> Iterator[dict]:
+         per_language: int | None = None, granularity: str = "file",
+         cwes: frozenset[str] | set[str] | None = None) -> Iterator[dict]:
     """limit: toplam çift üst sınırı. per_language: her normalize dilden en çok N
-    çift. granularity: file | function | both (function: değişen fonksiyon düzeyi)."""
+    çift. granularity: file | function | both (function: değişen fonksiyon düzeyi).
+    cwes: yalnızca bu CWE'lerin CVE'leri (odaklı örnekleme, örn. mappings.LOGIC_CWES)."""
+    cwes = frozenset(cwes) if cwes else None
     if granularity not in ("file", "function", "both"):
         raise ValueError(f"geçersiz granularity: {granularity!r}")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -231,7 +259,7 @@ def read(db_path: str | Path, limit: int | None = None,
         total = 0
         for language in sorted(set(LANG_MAP.values())):
             taken = 0
-            for vulnerable, clean in _pairs_for_language(conn, language, granularity):
+            for vulnerable, clean in _pairs_for_language(conn, language, granularity, cwes):
                 if (limit and total >= limit) or (per_language and taken >= per_language):
                     break
                 yield vulnerable

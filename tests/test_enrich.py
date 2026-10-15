@@ -8,17 +8,17 @@ from secagent.dataprep import enrich as en
 CODE = "import os\nq = 'SELECT ' + x\nos.system(y)\n"
 
 
-def rec(findings=None, pair="CWE-89", code=CODE, lang="python", file="app/db.py"):
+def rec(findings=None, pair="CWE-120", code=CODE, lang="python", file="app/db.py"):
     return {"file": file, "language": lang, "code": code, "scanner_output": "",
             "group": "g", "pair_cwe": pair, "findings": findings or [], "summary": "s"}
 
 
 def vuln():
-    return rec([{"cwe": "CWE-89", "line": 2, "title": "SQL enjeksiyonu",
+    return rec([{"cwe": "CWE-120", "line": 2, "title": "SQL enjeksiyonu",
                  "evidence": "q = ...", "fix": "f"}])
 
 
-def alarm(line=2, cwe="CWE-89", rule="B608", file="rec_0/db.py"):
+def alarm(line=2, cwe="CWE-120", rule="B608", file="rec_0/db.py"):
     return {"tool": "bandit", "file": file, "line": line, "rule_id": rule,
             "message": "sql", "severity": "medium", "cwe": cwe}
 
@@ -42,7 +42,7 @@ def test_clean_with_matching_alarm_becomes_false_positive():
     out = en.label_record(rec(), [alarm(), alarm()])
     assert len(out["findings"]) == 1
     f = out["findings"][0]
-    assert f["false_positive"] is True and f["cwe"] == "CWE-89" and f["line"] == 2
+    assert f["false_positive"] is True and f["cwe"] == "CWE-120" and f["line"] == 2
     assert f["evidence"] == "q = 'SELECT ' + x"
 
 
@@ -121,8 +121,52 @@ def test_function_level_scans_whole_file_but_labels_function():
     def fake(path, lang):
         f = next(Path(path).glob("rec_*/*"))
         seen["text"] = f.read_text()
-        return [{**alarm(file=str(f)), "line": 11, "cwe": "CWE-89"}]
+        return [{**alarm(file=str(f)), "line": 11, "cwe": "CWE-120"}]
 
     out, st = en.enrich([r], scan_fn=fake)
     assert seen["text"].startswith("x\n")                  # tarayıcı DOSYAYI gördü
     assert out[0]["findings"][0]["line"] == 2 and out[0]["findings"][0]["false_positive"]
+
+
+def test_alarm_text_includes_scanner_cwe_when_known():
+    a = alarm()
+    assert en.format_alarm(a, "app/db.py").endswith("severity: medium, cwe: CWE-120)")
+    assert "cwe" not in en.format_alarm({**a, "cwe": None}, "app/db.py")
+
+
+# --- riskli ailelerde otomatik yanlış alarm ÜRETİLMEZ -----------------------
+import pytest  # noqa: E402
+
+from secagent import mappings as _m  # noqa: E402
+
+
+@pytest.mark.parametrize("cwe", ["CWE-89", "CWE-78", "CWE-94", "CWE-95", "CWE-502", "CWE-798", "CWE-77"])
+def test_clean_record_with_matching_alarm_in_risky_family_is_ambiguous(cwe):
+    r = rec(pair=cwe)
+    a = alarm(cwe=cwe)
+    assert en.label_record(r, [a]) is None                                   # atla
+    dropped = en.label_record(r, [a], ambiguous="drop")
+    assert dropped["findings"] == [] and dropped["scanner_output"] == ""     # alarm da gösterilmez
+
+
+@pytest.mark.parametrize("cwe", ["CWE-120", "CWE-119", "CWE-125", "CWE-22", "CWE-327", "CWE-79"])
+def test_non_risky_families_still_produce_false_positive_labels(cwe):
+    out = en.label_record(rec(pair=cwe), [alarm(cwe=cwe)])
+    assert out["findings"][0]["false_positive"] is True
+
+
+def test_risky_rule_never_blocks_vulnerable_records_or_authored_false_positives():
+    v = {**vuln(), "pair_cwe": "CWE-89",
+         "findings": [{**vuln()["findings"][0], "cwe": "CWE-89"}]}
+    out = en.label_record(v, [alarm(cwe="CWE-89")])
+    assert out is not None and "bandit" in out["scanner_output"]            # gerçek bulgu kaydı korunur
+    authored = {**rec(pair="CWE-78"), "require_alarm": True,
+                "findings": [{"cwe": "CWE-78", "line": 2, "title": "Yanlış alarm", "evidence": "x",
+                              "fix": "Sabit komut.", "false_positive": True}]}
+    assert en.label_record(authored, [alarm(cwe="CWE-78")]) is not None      # elle seçilmiş istisna korunur
+
+
+def test_is_risky_dismissal_helper():
+    assert _m.is_risky_dismissal("CWE-89") and _m.is_risky_dismissal("CWE-564")   # aile
+    assert _m.is_risky_dismissal("CWE-798") and _m.is_risky_dismissal("CWE-259")
+    assert not _m.is_risky_dismissal("CWE-120") and not _m.is_risky_dismissal(None)

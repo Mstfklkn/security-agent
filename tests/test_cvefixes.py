@@ -12,7 +12,7 @@ def test_yields_vulnerable_and_clean(tmp_path):
     f = vuln["findings"][0]
     assert (f["cwe"], f["line"], f["function"]) == ("CWE-89", 2, "get")
     assert "execute" in f["evidence"]
-    assert vuln["group"] == "https://r/x"
+    assert vuln["group"] == "x"
     assert clean["findings"] == [] and clean["code"] == AFTER
 
 
@@ -109,3 +109,42 @@ def test_both_and_invalid_granularity(tmp_path):
     assert len(list(cvefixes.read(db, granularity="both"))) == 4
     with pytest.raises(ValueError):
         list(cvefixes.read(db, granularity="x"))
+
+
+def test_cvss_map_returns_only_valid_scores(tmp_path):
+    db = tmp_path / "c.db"
+    make_db(db)
+    assert cvefixes.cvss_map(db) == {"CVE-1": (9.8, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")}
+    bad = tmp_path / "b.db"
+    make_db(bad, cvss=("None", "None"))
+    assert cvefixes.cvss_map(bad) == {}
+
+
+def test_cwe_focus_filters_cves_and_picks_matching_cwe(tmp_path):
+    db = tmp_path / "c.db"
+    make_db(db)
+    assert len(list(cvefixes.read(db, granularity="function", cwes={"CWE-89"}))) == 2
+    assert list(cvefixes.read(db, granularity="function", cwes={"CWE-79"})) == []
+    # CVE'nin birden çok CWE'si varsa filtreyle eşleşen seçilir
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO cwe_classification VALUES ('CVE-1','CWE-862')")
+    c.commit(); c.close()
+    vuln = next(cvefixes.read(db, granularity="function", cwes={"CWE-862"}))
+    assert vuln["pair_cwe"] == "CWE-862" and vuln["findings"][0]["cwe"] == "CWE-862"
+    assert next(cvefixes.read(db, granularity="function"))["pair_cwe"] == "CWE-89"   # filtresiz: ilk geçerli
+
+
+def test_logic_cwes_helper():
+    from secagent import mappings
+    assert mappings.is_logic("CWE-639") and mappings.is_logic("CWE-502")
+    assert not mappings.is_logic("CWE-89") and not mappings.is_logic(None)
+
+
+def test_cvefixes_titles_and_summaries_never_carry_cve_ids(tmp_path):
+    db = tmp_path / "c.db"
+    make_db(db)
+    for gran in ("file", "function"):
+        for rec in cvefixes.read(db, granularity=gran):
+            assert "CVE-" not in rec["summary"]
+            for f in rec["findings"]:
+                assert "CVE-" not in f["title"] and f["cve_id"] == "CVE-1"

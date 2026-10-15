@@ -5,7 +5,7 @@ from helpers import run_build
 from secagent.dataprep.sources import synthetic as sy
 from secagent.dataprep.sources.templates import TEMPLATES
 from secagent.schema import LANGUAGES, Example, validate_file
-from secagent.dataprep.splits import split_for
+from secagent.dataprep.splits import SPLITS, split_for
 
 
 def test_templates_cover_the_missing_languages():
@@ -64,9 +64,9 @@ def test_cli_synthetic_without_scanners_drops_unvalidated_fps(tmp_path):
     out = tmp_path / "o"
     r = run_build("--synthetic", "2", "--out-dir", str(out))
     assert "elenen" in r.stdout
-    rows = [json.loads(l) for n in ("train", "val", "test")
+    rows = [json.loads(l) for n in SPLITS
             for l in (out / f"{n}.jsonl").read_text().splitlines()]
-    assert sum(validate_file(out / f"{n}.jsonl")[1] for n in ("train", "val", "test")) == 0
+    assert sum(validate_file(out / f"{n}.jsonl")[1] for n in SPLITS) == 0
     assert not any(f["false_positive"] and "yanlış alarm" in f["title"]
                    for row in rows for f in row["output"]["findings"])
     assert {"kotlin", "swift", "docker", "terraform", "kubernetes"} <= \

@@ -69,8 +69,9 @@ def _record_index(file: str) -> int | None:
 
 def format_alarm(a: dict, file: str) -> str:
     msg = " ".join((a.get("message") or "").split())[:200]
+    cwe = f", cwe: {a['cwe']}" if a.get("cwe") else ""
     return (f"{a['tool']}: [{a['rule_id']}] {msg} "
-            f"({file}:{a.get('line')}, severity: {a.get('severity')})")
+            f"({file}:{a.get('line')}, severity: {a.get('severity')}{cwe})")
 
 
 def format_output(alarms: list[dict], file: str) -> str:
@@ -99,6 +100,9 @@ def label_record(rec: dict, alarms: list[dict], ambiguous: str = "skip") -> dict
     clear = [a for a in alarms
              if mappings.cwe_related(a.get("cwe"), gold) and isinstance(a.get("line"), int)]
     unclear = [a for a in alarms if a not in clear]
+    if not rec.get("findings") and mappings.is_risky_dismissal(gold):
+        # temiz kayıtta riskli ailede otomatik "yanlış alarm" etiketi üretme (bkz. mappings)
+        unclear, clear = unclear + clear, []
     if unclear and ambiguous == "skip":
         return None
 

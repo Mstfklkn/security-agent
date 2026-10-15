@@ -1,0 +1,41 @@
+# Qwen3-Coder-30B-A3B-Instruct LoRA SFT. H6 keşif oturumundan sonra değerler sabitlenir.
+model_id: Qwen/Qwen3-Coder-30B-A3B-Instruct
+train_file: data/out/train.jsonl
+val_file: data/out/val.jsonl
+output_dir: outputs/run1
+
+max_len: 4096
+quantization: none           # bf16 LoRA. nf4 bu model için GEÇERSİZ: MoE uzmanları (birleşik 3B parametre) nicemlenemez
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]   # yalnızca dikkat; router/uzmanlara dokunma
+
+epochs: 2
+learning_rate: 1.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+weight_decay: 0.0
+per_device_batch_size: 1
+grad_accum: 16
+gradient_checkpointing: true
+bf16: true
+
+logging_steps: 10
+eval_steps: 100
+eval_max_examples: 100       # değerlendirme Spot uyarısından (2 dk) kısa kalsın
+save_steps: 100              # Spot: sık kaydet; her kayıtta S3'e itilir
+save_total_limit: 3
+seed: 42
+
+s3:
+  uri: null                  # örn. s3://BUCKET/secagent/run1 (launch.sh RUN_URI ile doldurur)
+spot:
+  enabled: true
+  poll_seconds: 5
+
+# Maliyet tahmini (H6'da ölçülen hızla doldur; boşsa yalnızca token sayısı yazılır)
+usd_per_hour: null
+assumed_tokens_per_sec: null

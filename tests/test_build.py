@@ -102,3 +102,37 @@ def test_cvefixes_flag_without_value_uses_default_path(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["x", "--out", str(tmp_path / "o.jsonl"), "--cvefixes"])
     assert make_examples.main() == 0
     assert seen["path"].endswith("data/raw/CVEfixes/CVEfixes.db")
+
+
+def test_primevul_flag_end_to_end_with_real_cvss(tmp_path):
+    from test_primevul import FIXED, VULN, row, write
+    raw = tmp_path / "pv"; raw.mkdir()
+    write(raw, "train", [row(1, 1, VULN, cve="CVE-1"), row(2, 0, FIXED, cve="CVE-1")])
+    db = tmp_path / "c.db"
+    make_db(db)
+    out = tmp_path / "o"
+    run_build("--primevul", str(raw), "--cvefixes", str(db), "--out-dir", str(out))
+    rows = [json.loads(l) for n in ("train", "val", "test")
+            for l in (out / f"{n}.jsonl").read_text().splitlines()]
+    pv = [r for r in rows if r["input"]["language"] == "cpp"]
+    assert len(pv) == 2
+    vuln = next(r for r in pv if r["output"]["findings"])
+    f = vuln["output"]["findings"][0]
+    assert f["cvss"]["score"] == 9.8 and f["cwe"] == "CWE-787"      # CVEfixes'tan gerçek CVSS
+
+
+def test_logic_flag_requires_cvefixes_and_keeps_only_logic_cwes(tmp_path):
+    import subprocess, sys, os
+    from helpers import ROOT
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    r = subprocess.run([sys.executable, "-m", "secagent.dataprep.build", "--logic", "5",
+                        "--out-dir", str(tmp_path / "o")], capture_output=True, text=True, env=env)
+    assert r.returncode != 0 and "--cvefixes" in r.stderr
+    db = tmp_path / "c.db"
+    make_db(db)                                  # fixture CWE-89 = mantık hatası değil
+    out = tmp_path / "o2"
+    run_build("--logic", "5", "--logic-only", "--cvefixes", str(db), "--out-dir", str(out))
+    assert sum(validate_file(out / f"{n}.jsonl")[0] for n in ("train", "val", "test")) == 2   # yalnız samples
+    out3 = tmp_path / "o3"                       # genel okuma açıkken fixture CWE-89 gelir
+    run_build("--logic", "5", "--cvefixes", str(db), "--out-dir", str(out3))
+    assert sum(validate_file(out3 / f"{n}.jsonl")[0] for n in ("train", "val", "test")) == 4

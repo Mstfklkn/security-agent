@@ -15,6 +15,7 @@ import hashlib
 import re
 from typing import Iterator
 
+from ..splits import pick_holdout
 from .templates import TEMPLATES, Template
 
 _POOLS: dict[str, list[str]] = {
@@ -94,6 +95,14 @@ def records_for(template: Template, i: int) -> list[dict]:
                 "false_positive": True}],
                 "summary": f"Tarayıcı uyarısı yanlış alarm: {template.fp_reason}"})
     return out
+
+
+def holdout_groups() -> frozenset[str]:
+    """Eğitimden ayrılan şablon grupları (test_synthetic). --synthetic N'den bağımsızdır."""
+    by_language: dict[str, list[str]] = {}
+    for t in TEMPLATES:
+        by_language.setdefault(t.language, []).append(f"synthetic-{t.id}")
+    return pick_holdout(by_language)
 
 
 def generate(per_template: int, languages: set[str] | None = None) -> Iterator[dict]:

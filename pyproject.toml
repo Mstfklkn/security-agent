@@ -12,6 +12,11 @@ dependencies = ["pydantic>=2.6"]
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5"]
 scanners = ["bandit>=1.7", "pip-audit>=2.7"]
+# Eğitim yığını. Yerelde duman testi şu sürümlerle doğrulandı: torch 2.14, transformers 5.19,
+# peft 0.21, accelerate 1.15 (Python 3.12). GPU üzerinde H6'da doğrulanacak.
+train = ["torch>=2.4", "transformers>=5.0,<6", "peft>=0.17", "accelerate>=1.0", "pyyaml>=6"]
+train-gpu = ["bitsandbytes>=0.45; sys_platform == 'linux'"]
+eval-mlx = ["mlx-lm>=0.28; sys_platform == 'darwin'"]
 
 [project.scripts]
 secagent-build = "secagent.dataprep.build:main"
@@ -19,6 +24,8 @@ secagent-stats = "secagent.dataprep.stats:main"
 secagent-validate = "secagent.schema:main"
 secagent-scan = "secagent.scanners.runners:main"
 secagent-fetch = "secagent.dataprep.fetch:main"
+secagent-eval = "secagent.eval.cli:main"
+secagent-train = "secagent.train.run:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

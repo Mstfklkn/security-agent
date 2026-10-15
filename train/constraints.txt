@@ -1,0 +1,5 @@
+# GPU makinesinde bile bu sürümlerle kur: yerel CPU duman testi bu sürümlerle doğrulandı.
+# (torch makinenin CUDA yığınından gelir; burada sabitlenmez.)
+transformers==5.19.0
+peft==0.21.2
+accelerate==1.15.0

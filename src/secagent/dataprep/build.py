@@ -24,11 +24,11 @@ import sys
 from pathlib import Path
 
 from .. import mappings
-from ..paths import CVEFIXES_DB, OUT, SAMPLES
+from ..paths import CVEFIXES_DB, OUT, RAW, SAMPLES
 from ..schema import CVSS, Example, ExampleInput, ExampleOutput, Finding
 from . import enrich as enrich_scanners
-from .sources import cvefixes, synthetic
-from .splits import SPLITS, code_hash, split_for
+from .sources import cvefixes, primevul, synthetic
+from .splits import SPLITS, assign_split, code_hash, plan_real_splits
 
 
 def make_finding(
@@ -114,15 +114,17 @@ def load_samples(samples_dir: Path) -> list[dict]:
         return recs
     for p in sorted(samples_dir.glob("*.json")):
         try:
-            recs.append(json.loads(p.read_text(encoding="utf-8")))
+            recs.append({**json.loads(p.read_text(encoding="utf-8")), "origin": "sample"})
         except Exception as e:
             print(f"[uyarı] {p} okunamadı: {e}", file=sys.stderr)
     return recs
 
 
-def write_split(records: list[dict], out_dir: Path, training: bool) -> dict[str, int]:
-    """Kayıtları repo bazında train/val/test'e böler, kod hash'iyle tekilleştirir."""
+def write_split(records: list[dict], out_dir: Path, training: bool,
+                holdout: frozenset[str] = frozenset()) -> dict[str, int]:
+    """Kayıtları bölmelere ayırır (bkz. splits.py), kod hash'iyle tekilleştirir."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    plan = plan_real_splits(records)
     handles = {n: open(out_dir / f"{n}.jsonl", "w", encoding="utf-8") for n in SPLITS}
     counts = {n: 0 for n in SPLITS}
     seen: set[tuple[str, bool]] = set()
@@ -135,7 +137,7 @@ def write_split(records: list[dict], out_dir: Path, training: bool) -> dict[str,
             if ex is None:
                 continue
             seen.add(key)
-            name = split_for(rec.get("group") or rec["file"])
+            name = assign_split(rec, holdout, plan)
             handles[name].write(ex.to_jsonl(training=training) + "\n")
             counts[name] += 1
     finally:
@@ -157,6 +159,17 @@ def main() -> int:
                     help="CVEfixes örnek düzeyi (varsayılan: değişen fonksiyon)")
     ap.add_argument("--per-language", type=int,
                     help="CVEfixes'tan her dilden en çok N çift (dengeli örnekleme)")
+    ap.add_argument("--logic", type=int, default=0, metavar="N",
+                    help="CVEfixes'tan her dilden en çok N MANTIK HATASI çifti (IDOR, yetkilendirme, "
+                         "kimlik doğrulama, deserialization, CSRF); --per-language'a ek")
+    ap.add_argument("--logic-only", action="store_true",
+                    help="CVEfixes'tan genel örneklemeyi atla, yalnızca --logic ile gelenleri al")
+    ap.add_argument("--primevul", nargs="?", const=str(RAW / "PrimeVul"),
+                    help=f"PrimeVul klasörü (değer verilmezse {RAW / 'PrimeVul'}); C/C++ çiftleri")
+    ap.add_argument("--primevul-pairs", type=int, metavar="N",
+                    help="PrimeVul'den en çok N (zafiyetli, düzeltilmiş) çift (varsayılan: hepsi)")
+    ap.add_argument("--primevul-clean", type=int, default=0, metavar="N",
+                    help="PrimeVul'den N eşsiz temiz fonksiyon (alarmsız olanlar tutulur)")
     ap.add_argument("--synthetic", type=int, default=0, metavar="N",
                     help="her sentetik şablondan N varyant (kotlin/swift/docker/terraform/k8s)")
     ap.add_argument("--enrich", action="store_true",
@@ -171,11 +184,22 @@ def main() -> int:
         ap.error("--out veya --out-dir'den tam biri gerekli")
 
     records: list[dict] = list(load_samples(Path(args.samples)))
-    if args.cvefixes:
+    if args.cvefixes and not args.logic_only:
         records += list(cvefixes.read(args.cvefixes, limit=args.limit,
                                          per_language=args.per_language,
                                          granularity=args.granularity))
 
+    if args.logic:
+        if not args.cvefixes:
+            ap.error("--logic için --cvefixes gerekli")
+        records += list(cvefixes.read(args.cvefixes, per_language=args.logic,
+                                      granularity=args.granularity, cwes=mappings.LOGIC_CWES))
+    if args.primevul:
+        # CVE kimliği olan bulgulara gerçek (NVD) CVSS: CVEfixes veritabanı varsa oradan
+        db = Path(args.cvefixes) if args.cvefixes else CVEFIXES_DB
+        cvss = cvefixes.cvss_map(db) if db.is_file() else None
+        records += list(primevul.read(args.primevul, limit=args.primevul_pairs, cvss=cvss))
+        records += list(primevul.read_clean(args.primevul, args.primevul_clean))
     if args.synthetic:
         records += list(synthetic.generate(args.synthetic))
     if args.enrich:
@@ -187,7 +211,8 @@ def main() -> int:
 
     training = args.strip
     if args.out_dir:
-        counts = write_split(records, Path(args.out_dir), training)
+        counts = write_split(records, Path(args.out_dir), training,
+                             holdout=synthetic.holdout_groups())
         print(f"Yazıldı: {counts} -> {args.out_dir}")
         return 0
 
